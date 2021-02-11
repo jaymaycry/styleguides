@@ -107,9 +107,19 @@ This is a base class for the user entity that handels creation and update of use
 
 ## Queries
 
+### Abstract types
+
+Graphql offers the ability to specify abstract types to share a set of fields between object types. It requires some time though to think of possible use cases but in general it's good practice to use them for larger applications. F.e. a github `User` type implements the following abstract types (besides others):
+
+| Type         | Description                                                                     | Also implemented by               |
+| ------------ | ------------------------------------------------------------------------------- | --------------------------------- |
+| Node         | Things that all nodes share in common (see chapter below)                       | All objects                       |
+| Actor        | avatarUrl, username, resourcePath (profile url)                                 | EnterpriseUser, Organization, Bot |
+| ProjectOwner | a projects list, a boolean which says if the viewer/me can create projects here | Organization, Repository          |
+
 ### Nodes
 
-A node is every entity which has an id field. It should be an interface and implemented by every type in the app. It's a way of defining common fields like id, createdAt updatedAt or maybe an `active` flag in case one wants to use soft delete.
+A node is every entity which has an id field. It should be an interface and implemented by every type in the app.
 
 ```js
 // nexusjs approach
@@ -117,9 +127,6 @@ const Node = interfaceType({
   name: "Node",
   definition(t) {
     t.id("id", { description: "GUID for a resource" });
-    t.string("createdAt");
-    t.string("updatedAt");
-    t.boolean("active"); // soft delete
   },
 });
 
@@ -137,12 +144,12 @@ const User = objectType({
 
 ### Me / Viewer
 
-The logged in user is part of the root query object and should be queriable as "me" or "viewer". If the viewer has specific fields that relates to his active session it's recommended to create a `Viewer` type just for him.
+The logged in user is part of the root query object and should be queriable as "me" or "viewer". Its in general of type `User`, but can be created as a separate type if it has additional fields that only the active user can query.
 
 ```js
 // nexusjs approach
-const Profile = interfaceType({
-  name: "Profile",
+const ProfileOwner = interfaceType({
+  name: "ProfileOwner",
   definition(t) {
     t.string("email");
     t.string("name");
@@ -152,22 +159,19 @@ const User = objectType({
   name: "User",
   definition(t) {
     t.implements("Node");
-    t.implements("Profile");
+    t.implements("ProfileOwner");
   },
 });
 
-const Viewer = objectType({
-  name: "Viewer",
+export const Query = extendType({
+  type: "Query",
   definition(t) {
-    t.implements("Node");
-    t.implements("Profile");
-    // additional fields like stuff only the user can query etc.
-    t.field("projects", {
-      resolver: () {
-        // custom resolver that loads ones projects
-        // should only be accessible by the viewer
-        // ...
-      }
+    t.field("me", {
+      nullable: true,
+      type: User,
+      resolve: (root, args, context) => {
+        return context.user;
+      },
     });
   },
 });
@@ -175,7 +179,7 @@ const Viewer = objectType({
 
 ### Root Query Object
 
-The root query object should only contain stuff that is accessible by every user. Like a search or
+The root query object should only contain queries that are usable by every user. The resolvers there should be written in a way that it hides information from the user that he's not allowed to see, either by implementing queries accordingly or by blocking stuff that's not supposed to be found through authorization. In case there's something that only administrators can do, it should be prefixed with `admin` to mark it clearly for the api user.
 
 ## Mutations
 
@@ -199,7 +203,7 @@ const server = new ApolloServer({
   resolvers,
   context: ({ req }) => {
     // get the user token from the headers
-    const token = req.headers.authorization || "";
+    const token = ctx.req.headers.authorization || ctx.req.cookies?.token;
 
     // try to retrieve a user with the token
     const user = getUser(token);
@@ -211,6 +215,12 @@ const server = new ApolloServer({
 ```
 
 ### Authorization
+
+#### Field Authorization
+
+#### Type Authorization
+
+https://docs.gitlab.com/ee/development/api_graphql_styleguide.html#authorization
 
 ### Protection from malicious Queries
 
@@ -246,3 +256,5 @@ app.use(
 ```
 
 ## Resources
+
+https://docs.gitlab.com/ee/development/api_graphql_styleguide.html
