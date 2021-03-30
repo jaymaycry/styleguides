@@ -2,14 +2,14 @@
 
 ## Structure
 
-Graphql-Apis should ideally be structured in three layers. The Resolver-Layer, the Service-Layer and the Model-Layer, as shown in the picture below.
+Graphql-Apis should be structured in three layers. The resolver-layer, the service-layer and the model-layer, as shown in the picture below.
 
 ![alt text](/images/api.png "Logo Title Text 1")
 
 This can be achieved by a folder structure like this:
 
 ```
-api/
+graphql/
   modules/
     user/
       service/
@@ -27,7 +27,7 @@ api/
 
 ## Services
 
-Every entity in the database that can be accessed through the api has its own service, f.e. the `UserService`. There might be additional services like an `AuthService` or services to communicate with 3rd party apis. Services export themselfs as a singleton and communicate with other services through depdency injection.
+Every entity in the database that can be accessed through the api has its own service, f.e. the `UserService`. There might be additional services like an `AuthService` or services to communicate with 3rd party apis. Services export themselves as a singleton and communicate with other services through dependency injection.
 
 ```js
 export class UserService {
@@ -103,7 +103,11 @@ export class UserService {
 export default new UserService({ prisma });
 ```
 
-This is a base class for the user entity that handels creation and update of users. The prisma service gets injected as a dependency. Business logic in this case is the handling of hashing passwords before inserting it into the database. There could be other things like triggering an emails, creation of other entities (and therefore communicating with other injected services as well) or cleanup on deletion. This can be tested in an easy way by mocking the injected services and testing all the public methods.
+This is a base class for the user entity that handles crud operations of users. The prisma service gets injected as a dependency. Business logic in this case is the handling of hashing passwords before inserting it into the database. There could be other things like triggering an e-mail, creation of other entities (and therefore communicating with other injected services as well) or cleanup on deletion. This can be tested in an easy way by mocking the injected services and testing all the public methods.
+
+### Testing Services
+
+TODO
 
 ## Queries
 
@@ -144,7 +148,7 @@ const User = objectType({
 
 ### Me / Viewer
 
-The logged in user is part of the root query object and should be queriable as "me" or "viewer". Its in general of type `User`, but can be created as a separate type if it has additional fields that only the active user can query.
+The logged in user is part of the root query object and should be queryable as "me" or "viewer". It's in general of type `User`, but can be created as a separate type if it has additional fields that only the active user can query.
 
 ```js
 // nexusjs approach
@@ -179,7 +183,7 @@ export const Query = extendType({
 
 ### Root Query Object
 
-The root query object should only contain queries that are usable by every user. The resolvers there should be written in a way that it hides information from the user that he's not allowed to see, either by implementing queries accordingly or by blocking stuff that's not supposed to be found through authorization. In case there's something that only administrators can do, it should be prefixed with `admin` to mark it clearly for the api user.
+The root query object should only contain queries that are usable by every user. The resolvers there should be written in a way that it hides information from the user that he's not allowed to see, either by implementing queries accordingly or by filtering stuff that's not supposed to be found through authorization. In case there's something that only administrators can do, it should be prefixed with `admin` to mark it clearly for the api user.
 
 ## Mutations
 
@@ -187,13 +191,22 @@ The root query object should only contain queries that are usable by every user.
 
 Mutations should return objects containing the entities they edited. That way the cache can easily be updated when something changes on the backend. Also if you return an object rather than the entity itself you can later easily extend the result with further nodes that might interest the api user.
 
+```graphql
+type LoginResult {
+  user: User!
+  token: String!
+}
+```
+
 ## Input validation
+
+Input validation is part of the resolver. It depends on the args. You could provide input validation in the service but the resolver should then map those errors to the input args.
 
 ## Security
 
 ### Authentication
 
-Authentication should be implemented by using a jwt token that comes with each request and can be used to load a user into the `context` of a request.
+Authentication should be implemented by using a token (f.e. JWT) that comes with each request and can be used to load a user into the `context` of a request.
 
 ```js
 const { ApolloServer } = require("apollo-server");
@@ -222,7 +235,7 @@ const server = new ApolloServer({
 
 https://docs.gitlab.com/ee/development/api_graphql_styleguide.html#authorization
 
-### Protection from malicious Queries
+### Protection from malicious queries
 
 ```gql
 query maliciousQuery {
@@ -258,3 +271,29 @@ app.use(
 ## Resources
 
 https://docs.gitlab.com/ee/development/api_graphql_styleguide.html
+
+## NEXTJS
+
+Pass on cookies for initial render
+
+```js
+setContext(() => {
+  const headers: {
+    "accept-language"?: string;
+    authorization?: string;
+  } = {
+    ["accept-language"]: i18n.language,
+  };
+
+  // add auth header for ssr executed
+  // queries to pass the cookie token
+  const token = (ctx?.req as any)?.cookies?.token;
+  if (!process.browser && token) {
+    headers.authorization = token;
+  }
+
+  return {
+    headers,
+  };
+}) as any,
+```
