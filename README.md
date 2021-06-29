@@ -9,20 +9,19 @@ Graphql-Apis should be structured in three layers. The resolver-layer, the servi
 This can be achieved by a folder structure like this:
 
 ```
-graphql/
-  modules/
-    user/
-      service/
-        userService.ts        // User service
-        userService.spec.ts
-      query.ts                // query resolvers and object type definitions
-      mutation.ts             // mutation resolvers and input type definitions
-      validation.ts           // validation schemas (Joi)
-  permissions/
-    query.ts                  // query permissions
-    mutation.ts               // mutation permissions
-  utils/
-    validation.ts             // validation helper methods
+api/
+  services/
+    userService.ts            // User service
+  graphql/
+    modules/
+      user/
+        index.ts
+        query.ts              // query resolvers and object type definitions
+        mutation.ts           // mutation resolvers and input type definitions
+    permissions/
+      index.ts
+      query.ts                // query permissions
+      mutation.ts             // mutation permissions
 ```
 
 ## Services
@@ -77,7 +76,7 @@ export class UserService {
     where: Prisma.UserWhereUniqueInput;
     data: Prisma.UserUpdateInput;
   }) {
-    // enter business logic here
+    // business logic here
     const { where, data } = params;
     const newPassword = data.password
       ? await this.getHashedPassword(data.password as string)
@@ -93,7 +92,7 @@ export class UserService {
   }
 
   remove(where: Prisma.UserWhereUniqueInput) {
-    // enter business logic here
+    // business logic here
     return this.prisma.game.delete({
       where,
     });
@@ -104,10 +103,6 @@ export default new UserService({ prisma });
 ```
 
 This is a base class for the user entity that handles crud operations of users. The prisma service gets injected as a dependency. Business logic in this case is the handling of hashing passwords before inserting it into the database. There could be other things like triggering an e-mail, creation of other entities (and therefore communicating with other injected services as well) or cleanup on deletion. This can be tested in an easy way by mocking the injected services and testing all the public methods.
-
-### Testing Services
-
-TODO
 
 ## Queries
 
@@ -124,6 +119,20 @@ Graphql offers the ability to specify abstract types to share a set of fields be
 ### Nodes
 
 A node is every entity which has an id field. It should be an interface and implemented by every type in the app.
+
+```gql
+type Node {
+  id: ID!
+}
+
+type User implements Node {
+  email: String!
+  firstName: String
+  lastName: String
+}
+```
+
+As Nexus Example:
 
 ```js
 // nexusjs approach
@@ -149,6 +158,11 @@ const User = objectType({
 ### Me / Viewer
 
 The logged in user is part of the root query object and should be queryable as "me" or "viewer". It's in general of type `User`, but can be created as a separate type if it has additional fields that only the active user can query.
+
+```gql
+type User implements Node & ProfileOwner {
+}
+```
 
 ```js
 // nexusjs approach
@@ -181,11 +195,39 @@ export const Query = extendType({
 });
 ```
 
-### Root Query Object
+### Root Query Type
 
 The root query object should only contain queries that are usable by every user. The resolvers there should be written in a way that it hides information from the user that he's not allowed to see, either by implementing queries accordingly or by filtering stuff that's not supposed to be found through authorization. In case there's something that only administrators can do, it should be prefixed with `admin` to mark it clearly for the api user.
 
+### Pagination
+
+TODO
+
 ## Mutations
+
+### User Related Mutations
+
+Some mutations may be related to the user, that is calling them. For better overview it's important to name them accordingly, a bit like the "me" field on Query.
+
+For example having those two mutations:
+
+```gql
+type Mutation {
+  editUser(userId: string): UserUpdateResult
+  assignTicket(userId: string, ticketId: string): AssignTicketResult
+}
+```
+
+If the usecase is that a User only needs to update himself or only assign tickets to himself it could look like this:
+
+```gql
+type Mutation {
+  editMe(): UserUpdateResult
+  assignTicketToMe(tickedId: string): AssignTicketResult
+}
+```
+
+And the user is resolved from the context of the query. No need to check permissions (can the user calling this do that?).
 
 ### Results
 
@@ -200,7 +242,7 @@ type LoginResult {
 
 ## Input validation
 
-Input validation is part of the resolver. It depends on the args. You could provide input validation in the service but the resolver should then map those errors to the input args.
+Input validation is part of the resolver logic as it depends on the input args. You could provide input validation in the service but the resolver should then map those errors to the input args.
 
 ## Security
 
@@ -229,11 +271,59 @@ const server = new ApolloServer({
 
 ### Authorization
 
+Authorization can be implemented globally, per type or per field. Even for input args there's a way to apply permission checks. It's therefore necessary to differentiate between query permissions and mutation permissions.
+
+https://docs.gitlab.com/ee/development/api_graphql_styleguide.html#authorization
+
 #### Field Authorization
+
+Ideally you specify permissions for each field of each Type. That way you can prevent data leaks and have full control over the output.
+
+```js
+{
+  Query: {
+    "*": isAdmin,                       // check for admin role
+    me: allow,                          // allow rule for any user (incl. unauthenticated)
+    client: isAuthenticated,            // logged in users
+    building: isAuthenticated,
+    partner: race(isAdmin, isPartner),  // check for admin or partner role
+  },
+  LoginResult: {
+    "*": allow,
+  },
+  User: {
+    id: race(isAdmin, isPartner, isMe), // check if admin or partner or if it's my user
+    firstname: race(isAdmin, isPartner, isMe),
+    lastname: race(isAdmin, isPartner, isMe)
+    ...
+  }
+}
+```
 
 #### Type Authorization
 
-https://docs.gitlab.com/ee/development/api_graphql_styleguide.html#authorization
+Another way would be to define authorization rules on types. This saves some lines of code but may leave the door open to unintended data access when adding new resolvers to a type.
+
+```js
+{
+  User: isMe, // check if it's my user
+}
+```
+
+#### Mutation Authorization
+
+Mutation authorization depends on the context and input args. For some cases it's enough to check if the user is authenticated or if he has a certain role. But sometimes you need to check the input arguments, f.e. when referencing another entity. Then you may need to check this reference if the user is allowed to use it.
+
+```js
+{
+  Mutation: {
+    "*": isAdmin,
+    login: allow,
+    logout: allow,
+    updateRoom: isRoomOwner, // depends on user and referenced roomId in the args
+  }
+}
+```
 
 ### Protection from malicious queries
 
@@ -270,7 +360,14 @@ app.use(
 
 ## Resources
 
+https://graphql.org/learn/best-practices
 https://docs.gitlab.com/ee/development/api_graphql_styleguide.html
+https://docs.gitlab.com/ee/development/api_graphql_styleguide.html#authorization
+
+## Example APIS
+
+https://gitlab.com/-/graphql-explorer
+https://docs.github.com/en/graphql/overview/explorer
 
 ## NEXTJS
 
